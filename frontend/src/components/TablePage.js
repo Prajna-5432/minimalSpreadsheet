@@ -1,16 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { useColumns, useRows, useSummary } from '../hooks/useApi';
+import { columnsApi, rowsApi } from '../api/endpoints';
 import ColumnAddModal from './ColumnAddModal';
 import AddRowButton from './AddRowButton';
 import InlineCell from './InlineCell';
 import SummaryRow from './SummaryRow';
+import DeleteConfirmModal from './DeleteConfirmModal';
 import './TablePage.css';
 
 const TablePage = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(10);
   const [showColumnModal, setShowColumnModal] = useState(false);
-  const [tableContainerRef, setTableContainerRef] = useState(null);
+  const [showScrollToTop, setShowScrollToTop] = useState(false);
+  const [deleteModal, setDeleteModal] = useState({
+    isOpen: false,
+    type: null, // 'column' or 'row'
+    item: null,
+    isLoading: false
+  });
   
   // Debug logging
   console.log('TablePage render - showColumnModal:', showColumnModal);
@@ -71,148 +79,383 @@ const TablePage = () => {
     }, 2000);
   }, [refetchColumns, refetchSummary, columns?.length]);
 
+  // Function to update scroll to top button
+  const updateScrollToTopButton = (container) => {
+    // Show scroll to top button if scrolled down
+    setShowScrollToTop(container.scrollTop > 100);
+  };
+
+  // Function to scroll to top
+  const scrollToTop = () => {
+    const tableContainer = document.querySelector('.table-container');
+    if (tableContainer) {
+      tableContainer.scrollTo({
+        top: 0,
+        left: 0,
+        behavior: 'smooth'
+      });
+    }
+  };
+
+  // Delete functions
+  const handleDeleteColumn = (column) => {
+    setDeleteModal({
+      isOpen: true,
+      type: 'column',
+      item: column,
+      isLoading: false
+    });
+  };
+
+  const handleDeleteRow = (row) => {
+    setDeleteModal({
+      isOpen: true,
+      type: 'row',
+      item: row,
+      isLoading: false
+    });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteModal.item) return;
+
+    setDeleteModal(prev => ({ ...prev, isLoading: true }));
+
+    try {
+      if (deleteModal.type === 'column') {
+        await columnsApi.deleteColumn(deleteModal.item.id);
+        await refetchColumns();
+        await refetchSummary();
+      } else if (deleteModal.type === 'row') {
+        await rowsApi.deleteRow(deleteModal.item.id);
+        // Refresh the current page
+        window.location.reload();
+      }
+      
+      setDeleteModal({
+        isOpen: false,
+        type: null,
+        item: null,
+        isLoading: false
+      });
+    } catch (error) {
+      console.error('Delete error:', error);
+      setDeleteModal(prev => ({ ...prev, isLoading: false }));
+      alert('Failed to delete. Please try again.');
+    }
+  };
+
+  const cancelDelete = () => {
+    setDeleteModal({
+      isOpen: false,
+      type: null,
+      item: null,
+      isLoading: false
+    });
+  };
+
   // Add scrolling functionality
   useEffect(() => {
-    const tableContainer = document.querySelector('.table-container');
-    if (!tableContainer) return;
+    // Wait for DOM to be ready and ensure table container exists
+    const initializeScrolling = () => {
+      const tableContainer = document.querySelector('.table-container');
+      if (!tableContainer) {
+        // Retry after a short delay if container not found
+        setTimeout(initializeScrolling, 100);
+        return;
+      }
 
-    // Ensure the table container can scroll to show all content
-    const ensureFullScroll = () => {
-      // Force a reflow to ensure proper scroll dimensions
-      tableContainer.style.height = tableContainer.offsetHeight + 'px';
-      setTimeout(() => {
-        tableContainer.style.height = '';
-      }, 100);
-    };
+      // Ensure the table container can scroll to show all content
+      const ensureFullScroll = () => {
+        // Force a reflow to ensure proper scroll dimensions
+        const table = tableContainer.querySelector('.spreadsheet-table');
+        if (table) {
+          // Calculate width based on number of columns (150px per column)
+          const columnCount = columns?.length || 10;
+          const calculatedWidth = Math.max(columnCount * 150, 2000); // Minimum 2000px for unlimited columns
+          
+          // Ensure table has proper dimensions for full scrolling
+          table.style.minHeight = '600px'; // 10 rows * 60px = 600px
+          table.style.minWidth = `${calculatedWidth}px`;
+          table.style.width = `${calculatedWidth}px`;
+          table.style.height = 'auto';
+          
+          // Force reflow to update dimensions
+          void tableContainer.offsetHeight;
+          void table.offsetHeight;
+          
+          // Ensure container can scroll to full extent
+          const maxScrollLeft = tableContainer.scrollWidth - tableContainer.clientWidth;
+          const maxScrollTop = tableContainer.scrollHeight - tableContainer.clientHeight;
+          
+          console.log('Scroll dimensions for', columnCount, 'columns:', {
+            scrollWidth: tableContainer.scrollWidth,
+            scrollHeight: tableContainer.scrollHeight,
+            clientWidth: tableContainer.clientWidth,
+            clientHeight: tableContainer.clientHeight,
+            maxScrollLeft,
+            maxScrollTop,
+            calculatedWidth
+          });
+        }
+      };
 
-    // Call ensureFullScroll when columns change
-    ensureFullScroll();
-
-    // Debug function to check scroll dimensions
-    const debugScrollDimensions = () => {
-      console.log('Table Container Dimensions:');
-      console.log('- Client Height:', tableContainer.clientHeight);
-      console.log('- Scroll Height:', tableContainer.scrollHeight);
-      console.log('- Max Scroll Top:', tableContainer.scrollHeight - tableContainer.clientHeight);
-      console.log('- Can reach bottom:', tableContainer.scrollHeight > tableContainer.clientHeight);
-    };
-
-    // Debug scroll dimensions after a short delay
-    setTimeout(debugScrollDimensions, 500);
-
-    // Mouse wheel and touchpad scrolling
-    const handleWheel = (e) => {
-      // Only prevent default if we're actually scrolling the table
-      const isScrollingHorizontally = e.deltaX !== 0;
-      const isScrollingVertically = e.deltaY !== 0;
+      // Call ensureFullScroll when columns change
+      ensureFullScroll();
       
-      if (isScrollingHorizontally) {
+      // Update scroll to top button
+      updateScrollToTopButton(tableContainer);
+
+      // Debug function to check scroll dimensions
+      const debugScrollDimensions = () => {
+        console.log('Table Container Dimensions:');
+        console.log('- Client Height:', tableContainer.clientHeight);
+        console.log('- Scroll Height:', tableContainer.scrollHeight);
+        console.log('- Max Scroll Top:', tableContainer.scrollHeight - tableContainer.clientHeight);
+        console.log('- Can reach bottom:', tableContainer.scrollHeight > tableContainer.clientHeight);
+      };
+
+      // Debug scroll dimensions after a short delay
+      setTimeout(debugScrollDimensions, 500);
+
+      // Robust mouse wheel and touchpad scrolling
+      const handleWheel = (e) => {
         e.preventDefault();
-        const scrollAmount = e.deltaX * 4; // Moderate horizontal scrolling
-        tableContainer.scrollLeft += scrollAmount;
-      } else if (isScrollingVertically) {
-        // Allow natural vertical scrolling, but enhance it slightly
-        const scrollAmount = e.deltaY * 1.5; // Slight enhancement for vertical
-        tableContainer.scrollTop += scrollAmount;
-        // Don't prevent default to allow natural scrollbar behavior
-      }
-    };
+        
+        // Enhanced scroll amounts for better navigation
+        const horizontalScroll = e.deltaX * 2.5; // Increased for better horizontal scrolling
+        const verticalScroll = e.deltaY * 2.5; // Increased for better vertical scrolling
+        
+        // Apply scrolling with bounds checking
+        const newScrollLeft = Math.max(0, Math.min(
+          tableContainer.scrollLeft + horizontalScroll,
+          tableContainer.scrollWidth - tableContainer.clientWidth
+        ));
+        const newScrollTop = Math.max(0, Math.min(
+          tableContainer.scrollTop + verticalScroll,
+          tableContainer.scrollHeight - tableContainer.clientHeight
+        ));
+        
+        tableContainer.scrollLeft = newScrollLeft;
+        tableContainer.scrollTop = newScrollTop;
+      };
 
-    // Keyboard scrolling
-    const handleKeyDown = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') {
-        return; // Don't interfere with form inputs
-      }
+      // Keyboard scrolling
+      const handleKeyDown = (e) => {
+        // Check if we're in an input field
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') {
+          return; // Don't interfere with form inputs
+        }
 
-      const scrollAmount = 150; // Scroll distance for each key press
-      
-      switch (e.key) {
-        case 'ArrowLeft':
-          e.preventDefault();
-          tableContainer.scrollLeft -= scrollAmount;
-          break;
-        case 'ArrowRight':
-          e.preventDefault();
-          tableContainer.scrollLeft += scrollAmount;
-          break;
-        case 'ArrowUp':
-          e.preventDefault();
-          tableContainer.scrollTop -= scrollAmount;
-          break;
-        case 'ArrowDown':
-          e.preventDefault();
-          tableContainer.scrollTop += scrollAmount;
-          break;
-        case 'Home':
-          e.preventDefault();
-          tableContainer.scrollLeft = 0;
-          tableContainer.scrollTop = 0;
-          break;
-        case 'End':
-          e.preventDefault();
-          tableContainer.scrollLeft = tableContainer.scrollWidth - tableContainer.clientWidth;
-          tableContainer.scrollTop = tableContainer.scrollHeight - tableContainer.clientHeight;
-          break;
-        case 'PageUp':
-          e.preventDefault();
-          tableContainer.scrollLeft -= tableContainer.clientWidth * 0.8;
-          tableContainer.scrollTop -= tableContainer.clientHeight * 0.8;
-          break;
-        case 'PageDown':
-          e.preventDefault();
-          tableContainer.scrollLeft += tableContainer.clientWidth * 0.8;
-          tableContainer.scrollTop += tableContainer.clientHeight * 0.8;
-          break;
-      }
-    };
+        // Only handle arrow keys and navigation keys
+        const navigationKeys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
+        if (!navigationKeys.includes(e.key)) {
+          return;
+        }
 
-    // Touch events for touchpad gestures
-    let touchStartX = 0;
-    let touchStartY = 0;
-    
-    const handleTouchStart = (e) => {
-      if (e.touches.length === 1) {
-        touchStartX = e.touches[0].clientX;
-        touchStartY = e.touches[0].clientY;
-      }
-    };
-    
-    const handleTouchMove = (e) => {
-      if (e.touches.length === 1) {
         e.preventDefault();
-        const touchCurrentX = e.touches[0].clientX;
-        const touchCurrentY = e.touches[0].clientY;
         
-        const deltaX = touchStartX - touchCurrentX;
-        const deltaY = touchStartY - touchCurrentY;
+        // Enhanced scroll amounts for better navigation
+        const cellScrollAmount = 150; // Distance for cell-by-cell navigation
+        const pageScrollAmount = Math.max(tableContainer.clientWidth, tableContainer.clientHeight) * 0.8;
         
-        // If horizontal movement is greater than vertical, scroll horizontally
-        if (Math.abs(deltaX) > Math.abs(deltaY)) {
-          tableContainer.scrollLeft += deltaX * 6; // Very fast horizontal scrolling
-        } else {
-          // Scroll vertically when vertical movement is detected
-          tableContainer.scrollTop += deltaY * 6; // Very fast vertical scrolling
+        let newScrollLeft = tableContainer.scrollLeft;
+        let newScrollTop = tableContainer.scrollTop;
+        
+        switch (e.key) {
+          case 'ArrowLeft':
+            newScrollLeft = Math.max(0, newScrollLeft - cellScrollAmount);
+            break;
+          case 'ArrowRight':
+            newScrollLeft = Math.min(
+              tableContainer.scrollWidth - tableContainer.clientWidth,
+              newScrollLeft + cellScrollAmount
+            );
+            break;
+          case 'ArrowUp':
+            newScrollTop = Math.max(0, newScrollTop - cellScrollAmount);
+            break;
+          case 'ArrowDown':
+            newScrollTop = Math.min(
+              tableContainer.scrollHeight - tableContainer.clientHeight,
+              newScrollTop + cellScrollAmount
+            );
+            break;
+          case 'Home':
+            newScrollLeft = 0;
+            newScrollTop = 0;
+            break;
+          case 'End':
+            newScrollLeft = tableContainer.scrollWidth - tableContainer.clientWidth;
+            newScrollTop = tableContainer.scrollHeight - tableContainer.clientHeight;
+            break;
+          case 'PageUp':
+            newScrollLeft = Math.max(0, newScrollLeft - pageScrollAmount);
+            newScrollTop = Math.max(0, newScrollTop - pageScrollAmount);
+            break;
+          case 'PageDown':
+            newScrollLeft = Math.min(
+              tableContainer.scrollWidth - tableContainer.clientWidth,
+              newScrollLeft + pageScrollAmount
+            );
+            newScrollTop = Math.min(
+              tableContainer.scrollHeight - tableContainer.clientHeight,
+              newScrollTop + pageScrollAmount
+            );
+            break;
         }
         
-        touchStartX = touchCurrentX;
-        touchStartY = touchCurrentY;
+        // Apply smooth scrolling
+        tableContainer.scrollTo({
+          left: newScrollLeft,
+          top: newScrollTop,
+          behavior: 'smooth'
+        });
+      };
+
+      // Touch events for touchpad gestures
+      let touchStartX = 0;
+      let touchStartY = 0;
+      
+      const handleTouchStart = (e) => {
+        if (e.touches.length === 1) {
+          touchStartX = e.touches[0].clientX;
+          touchStartY = e.touches[0].clientY;
+        }
+      };
+      
+      const handleTouchMove = (e) => {
+        if (e.touches.length === 1) {
+          e.preventDefault();
+          
+          const touchCurrentX = e.touches[0].clientX;
+          const touchCurrentY = e.touches[0].clientY;
+          
+          const deltaX = touchStartX - touchCurrentX;
+          const deltaY = touchStartY - touchCurrentY;
+          
+          // Enhanced touch scrolling with bounds checking
+          const newScrollLeft = Math.max(0, Math.min(
+            tableContainer.scrollLeft + deltaX * 1.8,
+            tableContainer.scrollWidth - tableContainer.clientWidth
+          ));
+          const newScrollTop = Math.max(0, Math.min(
+            tableContainer.scrollTop + deltaY * 1.8,
+            tableContainer.scrollHeight - tableContainer.clientHeight
+          ));
+          
+          tableContainer.scrollLeft = newScrollLeft;
+          tableContainer.scrollTop = newScrollTop;
+          
+          touchStartX = touchCurrentX;
+          touchStartY = touchCurrentY;
+        }
+      };
+
+      // Scroll event handler to update scroll to top button
+      const handleScroll = () => {
+        updateScrollToTopButton(tableContainer);
+      };
+
+      // Resize observer to update scroll to top button when container size changes
+      const resizeObserver = new ResizeObserver(() => {
+        updateScrollToTopButton(tableContainer);
+      });
+      resizeObserver.observe(tableContainer);
+
+      // Add event listeners
+      tableContainer.addEventListener('wheel', handleWheel, { passive: false });
+      tableContainer.addEventListener('touchstart', handleTouchStart, { passive: true });
+      tableContainer.addEventListener('touchmove', handleTouchMove, { passive: false });
+      tableContainer.addEventListener('scroll', handleScroll, { passive: true });
+      
+      // Add keyboard event listener to document
+      document.addEventListener('keydown', handleKeyDown);
+      
+      // Debug: Log when keyboard events are attached
+      console.log('Keyboard scrolling events attached to document');
+      
+      // Test keyboard scrolling
+      const testKeyboardScrolling = () => {
+        console.log('Testing keyboard scrolling...');
+        console.log('Table container found:', !!tableContainer);
+        console.log('Table container scroll dimensions:');
+        console.log('- scrollWidth:', tableContainer.scrollWidth);
+        console.log('- scrollHeight:', tableContainer.scrollHeight);
+        console.log('- clientWidth:', tableContainer.clientWidth);
+        console.log('- clientHeight:', tableContainer.clientHeight);
+      };
+      
+      // Test after a short delay
+      setTimeout(testKeyboardScrolling, 1000);
+
+      // Cleanup function for this initialization
+      const cleanup = () => {
+        tableContainer.removeEventListener('wheel', handleWheel);
+        tableContainer.removeEventListener('touchstart', handleTouchStart);
+        tableContainer.removeEventListener('touchmove', handleTouchMove);
+        tableContainer.removeEventListener('scroll', handleScroll);
+        document.removeEventListener('keydown', handleKeyDown);
+        resizeObserver.disconnect();
+      };
+
+      // Return cleanup function
+      return cleanup;
+    };
+
+    // Initialize scrolling
+    const cleanup = initializeScrolling();
+
+    // Cleanup on unmount or dependency change
+    return () => {
+      if (cleanup) cleanup();
+    };
+  }, [columns, columns?.length, showColumnModal]); // Re-run when columns change or modal state changes
+
+  // Additional effect to ensure scrolling works after data loads
+  useEffect(() => {
+    if (!columnsLoading && !rowsLoading && columns && columns.length > 0) {
+      // Force re-initialization of scrolling after data loads
+      const timer = setTimeout(() => {
+        const tableContainer = document.querySelector('.table-container');
+        if (tableContainer) {
+          console.log('Re-initializing scrolling after data load...');
+          updateScrollToTopButton(tableContainer);
+          
+          // Force a reflow to ensure proper dimensions
+          const table = tableContainer.querySelector('.spreadsheet-table');
+          if (table) {
+            const columnCount = columns.length;
+            const calculatedWidth = Math.max(columnCount * 150, 2000);
+            table.style.minWidth = `${calculatedWidth}px`;
+            table.style.width = `${calculatedWidth}px`;
+            
+            // Force reflow
+            void tableContainer.offsetHeight;
+            void table.offsetHeight;
+          }
+        }
+      }, 500);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [columnsLoading, rowsLoading, columns]);
+
+  // Handle window resize to ensure scrolling works properly
+  useEffect(() => {
+    const handleResize = () => {
+      const tableContainer = document.querySelector('.table-container');
+      if (tableContainer) {
+        // Update scroll to top button after resize
+        setTimeout(() => {
+          updateScrollToTopButton(tableContainer);
+        }, 100);
       }
     };
 
-    // Add event listeners
-    tableContainer.addEventListener('wheel', handleWheel, { passive: false });
-    tableContainer.addEventListener('touchstart', handleTouchStart, { passive: true });
-    tableContainer.addEventListener('touchmove', handleTouchMove, { passive: false });
-    document.addEventListener('keydown', handleKeyDown);
-
-    // Cleanup
-    return () => {
-      tableContainer.removeEventListener('wheel', handleWheel);
-      tableContainer.removeEventListener('touchstart', handleTouchStart);
-      tableContainer.removeEventListener('touchmove', handleTouchMove);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [columns]); // Re-run when columns change
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Loading state
   if (columnsLoading || rowsLoading || summaryLoading) {
@@ -285,72 +528,6 @@ const TablePage = () => {
           )}
           <button 
             onClick={() => {
-              const tableContainer = document.querySelector('.table-container');
-              if (tableContainer) {
-                tableContainer.scrollTo({ left: 0, behavior: 'smooth' });
-              }
-            }}
-            title="Scroll to start (or use Home key)"
-            style={{
-              backgroundColor: '#6f42c1',
-              color: 'white',
-              border: 'none',
-              padding: '6px 12px',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              marginRight: '8px',
-              fontSize: '12px'
-            }}
-          >
-            ← Start
-          </button>
-          <button 
-            onClick={() => {
-              const tableContainer = document.querySelector('.table-container');
-              if (tableContainer) {
-                const maxScroll = tableContainer.scrollWidth - tableContainer.clientWidth;
-                tableContainer.scrollTo({ left: maxScroll, behavior: 'smooth' });
-              }
-            }}
-            title="Scroll to end (or use End key)"
-            style={{
-              backgroundColor: '#6f42c1',
-              color: 'white',
-              border: 'none',
-              padding: '6px 12px',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              marginRight: '8px',
-              fontSize: '12px'
-            }}
-          >
-            End →
-          </button>
-          <button 
-            onClick={() => {
-              const tableContainer = document.querySelector('.table-container');
-              if (tableContainer) {
-                const maxScrollTop = tableContainer.scrollHeight - tableContainer.clientHeight;
-                tableContainer.scrollTo({ top: maxScrollTop, behavior: 'smooth' });
-                console.log('Scrolling to bottom - Max scroll top:', maxScrollTop);
-              }
-            }}
-            title="Scroll to bottom (10th row)"
-            style={{
-              backgroundColor: '#28a745',
-              color: 'white',
-              border: 'none',
-              padding: '6px 12px',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              marginRight: '8px',
-              fontSize: '12px'
-            }}
-          >
-            ↓ Bottom
-          </button>
-          <button 
-            onClick={() => {
               console.log('Add Column button clicked');
               setShowColumnModal(true);
             }} 
@@ -372,8 +549,20 @@ const TablePage = () => {
               <th className="row-header">Row</th>
               {columns?.map(column => (
                 <th key={column.id} className="column-header">
-                  <div className="column-name">{column.column_name}</div>
-                  <div className="column-type">{column.column_type}</div>
+                  <div className="column-header-content">
+                    <div className="column-info">
+                      <div className="column-name">{column.column_name}</div>
+                      <div className="column-type">{column.column_type}</div>
+                    </div>
+                    <button 
+                      className="delete-column-btn"
+                      onClick={() => handleDeleteColumn(column)}
+                      title={`Delete column: ${column.column_name}`}
+                      aria-label={`Delete column: ${column.column_name}`}
+                    >
+                      ×
+                    </button>
+                  </div>
                 </th>
               ))}
             </tr>
@@ -382,7 +571,19 @@ const TablePage = () => {
             <SummaryRow columns={columns} summary={summary} />
             {rowsData?.rows?.map(row => (
               <tr key={row.id} className={`data-row ${row.row_number === 1 ? 'new-row' : ''}`}>
-                <td className="row-number">{row.row_number}</td>
+                <td className="row-number-cell">
+                  <div className="row-number-content">
+                    <span className="row-number">{row.row_number}</span>
+                    <button 
+                      className="delete-row-btn"
+                      onClick={() => handleDeleteRow(row)}
+                      title={`Delete row ${row.row_number}`}
+                      aria-label={`Delete row ${row.row_number}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                </td>
                 {columns?.map(column => {
                   const cell = row.cells.find(c => c.column_id === column.id);
                   return (
@@ -399,6 +600,7 @@ const TablePage = () => {
             ))}
           </tbody>
         </table>
+        
         </div>
 
       {rowsData?.pagination && rowsData.pagination.pages > 1 && (
@@ -430,6 +632,31 @@ const TablePage = () => {
           // Column was successfully added, the data will be refreshed automatically
           // by the React Query cache invalidation in the useAddColumn hook
         }}
+      />
+      
+      {/* Scroll to top button */}
+      <button 
+        className={`scroll-to-top ${showScrollToTop ? '' : 'hidden'}`}
+        onClick={scrollToTop}
+        title="Scroll to top"
+        aria-label="Scroll to top of table"
+      >
+        ↑
+      </button>
+      
+      {/* Delete confirmation modal */}
+      <DeleteConfirmModal
+        isOpen={deleteModal.isOpen}
+        onClose={cancelDelete}
+        onConfirm={confirmDelete}
+        title={deleteModal.type === 'column' ? 'Delete Column' : 'Delete Row'}
+        message={deleteModal.type === 'column' 
+          ? 'Are you sure you want to delete this column? This will permanently remove the column and all its data.'
+          : 'Are you sure you want to delete this row? This will permanently remove the row and all its data.'
+        }
+        itemName={deleteModal.item?.column_name || `Row ${deleteModal.item?.row_number}`}
+        itemType={deleteModal.type === 'column' ? 'Column' : 'Row'}
+        isLoading={deleteModal.isLoading}
       />
     </div>
   );

@@ -350,6 +350,80 @@ router.get('/rows', async (req, res) => {
   }
 });
 
+// DELETE /api/rows/:id - Delete a row
+router.delete('/rows/:id', async (req, res) => {
+  const { id } = req.params;
+  
+  if (!id || isNaN(parseInt(id))) {
+    return res.status(400).json({ 
+      success: false,
+      error: 'Valid row ID is required' 
+    });
+  }
+  
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    // First, check if row exists
+    const checkQuery = 'SELECT id, row_number FROM data_rows WHERE id = $1 AND is_active = TRUE';
+    const checkResult = await client.query(checkQuery, [id]);
+    
+    if (checkResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({ 
+        success: false,
+        error: 'Row not found' 
+      });
+    }
+    
+    const rowNumber = checkResult.rows[0].row_number;
+    
+    // Delete all cell values for this row
+    await client.query('DELETE FROM cell_values WHERE row_id = $1', [id]);
+    
+    // Delete all multi-select values for this row
+    await client.query('DELETE FROM multi_select_values WHERE row_id = $1', [id]);
+    
+    // Mark row as inactive instead of deleting
+    await client.query('UPDATE data_rows SET is_active = FALSE WHERE id = $1', [id]);
+    
+    // Update row numbers of remaining rows
+    await client.query('UPDATE data_rows SET row_number = row_number - 1 WHERE row_number > $1 AND is_active = TRUE', [rowNumber]);
+    
+    // Update row summary
+    const summaryQuery = `
+      UPDATE row_summary SET 
+        total_rows = total_rows - 1,
+        active_rows = active_rows - 1,
+        last_updated = CURRENT_TIMESTAMP
+    `;
+    await client.query(summaryQuery);
+    
+    await client.query('COMMIT');
+    client.release();
+    
+    console.log(`Row ${id} (row number ${rowNumber}) deleted successfully`);
+    
+    res.json({ 
+      success: true,
+      message: 'Row deleted successfully',
+      deleted_row_number: rowNumber
+    });
+    
+  } catch (err) {
+    await client.query('ROLLBACK');
+    client.release();
+    console.error('Delete row error:', err);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to delete row: ' + err.message 
+    });
+  }
+});
+
 // POST /api/rows - Create a new row
 router.post('/rows', async (req, res) => {
   let client;

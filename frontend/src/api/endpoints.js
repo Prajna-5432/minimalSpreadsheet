@@ -7,6 +7,9 @@ export const columnsApi = {
   
   // Create new column
   createColumn: (data) => api.post('/columns', data),
+  
+  // Delete column
+  deleteColumn: (id) => api.delete(`/columns/${id}`),
 };
 
 // Rows API
@@ -16,6 +19,9 @@ export const rowsApi = {
   
   // Create new row
   createRow: () => api.post('/rows'),
+  
+  // Delete row
+  deleteRow: (id) => api.delete(`/rows/${id}`),
 };
 
 // Cell API
